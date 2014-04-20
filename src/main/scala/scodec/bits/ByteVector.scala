@@ -4,6 +4,7 @@ import ByteVector._
 import java.nio.ByteBuffer
 import java.security.MessageDigest
 import scala.collection.GenTraversableOnce
+import java.io.OutputStream
 
 /**
  * An immutable vector of bytes, backed by a balanced binary tree of
@@ -290,16 +291,15 @@ sealed trait ByteVector extends BitwiseOperations[ByteVector,Int] with Serializa
    */
   final def foreach(f: Byte => Unit): Unit = foreachS(new F1BU { def apply(b: Byte) = f(b) })
 
-  private[scodec] final def foreachS(f: F1BU): Unit = {
+  private[scodec] final def foreachS(f: F1BU): Unit = foreachV(_.foreach(f))
+
+  private[scodec] final def foreachV(f: View => Unit): Unit = {
     @annotation.tailrec
-    def go(rem: Vector[ByteVector]): Unit = rem.headOption match {
-      case None => ()
-      case Some(bytes) => bytes match {
-        case Chunk(bs) => bs.foreach(f); go(rem.tail)
-        case Append(l,r) => go(l +: r +: rem.tail)
-      }
+    def go(rem: List[ByteVector]): Unit = if (!rem.isEmpty) rem.head match {
+      case Chunk(bs) => f(bs); go(rem.tail)
+      case Append(l,r) => go(l::r::rem.tail)
     }
-    go(Vector(this))
+    go(this::Nil)
   }
 
   /**
@@ -510,13 +510,16 @@ sealed trait ByteVector extends BitwiseOperations[ByteVector,Int] with Serializa
    */
   final def copyToArray(xs: Array[Byte], start: Int): Unit = {
     var i = start
-    @annotation.tailrec
-    def go(rem: List[ByteVector]): Unit = if (!rem.isEmpty) rem.head match {
-      case Chunk(bs) => bs.copyToArray(xs, i); i += bs.size; go(rem.tail)
-      case Append(l,r) => go(l::r::rem.tail)
-    }
-    go(this::Nil)
+    foreachV{ v => v.copyToArray(xs, i); i += v.size }
   }
+
+  /**
+   * Copies the contents of this vector to OutputStream `s`.
+   *
+   * @group conversions
+   */
+  final def copyToStream(s: OutputStream): Unit =
+    foreachV(_.copyToStream(s))
 
   /**
    * Converts the contents of this vector to an `IndexedSeq`.
@@ -792,6 +795,13 @@ object ByteVector {
         i += 1
       }
     }
+    def copyToStream(s: OutputStream, offset: Int, size: Int): Unit = {
+      var i = 0
+      while (i < size) {
+        s.write(apply(offset + i))
+        i += 1
+      }
+    }
   }
   private[scodec] abstract class F1B { def apply(b: Byte): Byte }
   private[scodec] abstract class F1BU { def apply(b: Byte): Unit }
@@ -805,6 +815,10 @@ object ByteVector {
       def apply(i: Int) = arr(i)
       override def copyToArray(xs: Array[Byte], start: Int, offset: Int, size: Int): Unit =
         System.arraycopy(arr, offset, xs, start, size)
+
+      override def copyToStream(s: OutputStream, offset: Int, size: Int): Unit = {
+        s.write(arr, offset, size)
+      }
     }
 
   private def AtByteBuffer(buf: ByteBuffer): At =
@@ -828,6 +842,8 @@ object ByteVector {
       while (i < size) { f(at(offset+i)); i += 1 }
       ()
     }
+    def copyToStream(s: OutputStream): Unit =
+      at.copyToStream(s, offset, size)
     def copyToArray(xs: Array[Byte], start: Int): Unit =
       at.copyToArray(xs, start, offset, size)
     def take(n: Int): View =
