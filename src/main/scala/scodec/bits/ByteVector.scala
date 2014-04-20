@@ -511,14 +511,11 @@ sealed trait ByteVector extends BitwiseOperations[ByteVector,Int] with Serializa
   final def copyToArray(xs: Array[Byte], start: Int): Unit = {
     var i = start
     @annotation.tailrec
-    def go(rem: Vector[ByteVector]): Unit = rem.headOption match {
-      case None => ()
-      case Some(bytes) => bytes match {
-        case Chunk(bs) => bs.copyToArray(xs, i); i += bs.size; go(rem.tail)
-        case Append(l,r) => go(l +: r +: rem.tail)
-      }
+    def go(rem: List[ByteVector]): Unit = if (!rem.isEmpty) rem.head match {
+      case Chunk(bs) => bs.copyToArray(xs, i); i += bs.size; go(rem.tail)
+      case Append(l,r) => go(l::r::rem.tail)
     }
-    go(Vector(this))
+    go(this::Nil)
   }
 
   /**
@@ -814,8 +811,9 @@ object ByteVector {
     new At {
       def apply(i: Int) = buf.get(i)
       override def copyToArray(xs: Array[Byte], start: Int, offset: Int, size: Int): Unit = {
-        buf.position(offset)
-        buf.get(xs, start, size)
+        val n = buf.duplicate()
+        n.position(offset)
+        n.get(xs, start, size)
       }
     }
 
@@ -900,9 +898,10 @@ object ByteVector {
    * @group constructors
    */
   def apply(buffer: ByteBuffer): ByteVector = {
-    val arr = Array.ofDim[Byte](buffer.remaining)
-    buffer.get(arr)
-    apply(arr)
+    val c = buffer.duplicate()
+    val arr = Array.ofDim[Byte](c.remaining)
+    c.get(arr)
+    view(arr)
   }
 
   /**
@@ -928,7 +927,7 @@ object ByteVector {
    * @group constructors
    */
   def view(bytes: ByteBuffer): ByteVector =
-    Chunk(View(AtByteBuffer(bytes), 0, bytes.limit))
+    Chunk(View(AtByteBuffer(bytes.duplicate()), 0, bytes.limit))
 
   /**
    * Constructs a `ByteVector` from a function from `Int => Byte` and a size.
